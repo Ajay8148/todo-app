@@ -2,44 +2,70 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
 
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
         with:
           node-version: 18
-      - run: npm install
-      - run: npm test
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
 
   docker-build:
     needs: build-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - run: docker build -t todo-app:${GITHUB_SHA::7} .
-      - uses: aquasecurity/trivy-action@master
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set short commit SHA
+        run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
+
+      - name: Build Docker image
+        run: docker build -t todo-app:$SHORT_SHA .
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@master
         with:
-          image-ref: todo-app:${{ github.sha }}
+          image-ref: todo-app:${{ env.SHORT_SHA }}
           exit-code: '0'
 
   push-ecr:
     needs: docker-build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: aws-actions/configure-aws-credentials@v2
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
-      - run: |
-          aws ecr get-login-password \
+
+      - name: Set short commit SHA
+        run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
           | docker login --username AWS --password-stdin ${{ secrets.ECR_URI }}
-      - run: |
-          docker build -t ${{ secrets.ECR_URI }}:${GITHUB_SHA::7} .
-          docker push ${{ secrets.ECR_URI }}:${GITHUB_SHA::7}
+
+      - name: Build and Push Docker image
+        run: |
+          docker build -t ${{ secrets.ECR_URI }}:$SHORT_SHA .
+          docker push ${{ secrets.ECR_URI }}:$SHORT_SHA
